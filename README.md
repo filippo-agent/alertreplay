@@ -1,150 +1,152 @@
 # alertreplay
 
-Replay Prometheus alerting rules against historical data in a live Prometheus
-server, **using Prometheus's own alert rule engine**, not a reimplementation of
-pending/firing semantics. Standalone Go CLI; no service or database to maintain.
+Would this alert have caught last week's outage? Would a longer `for:` have
+filtered out the noise—or delayed the page until it was too late?
 
-## Build and use
+alertreplay runs a Prometheus rules file against historical data and shows when
+each alert would have fired. Edit a threshold or duration, run it again, and
+compare the results before deploying the change.
 
-Requires Go 1.27.1 or newer (the version pinned in `go.mod`).
+It uses Prometheus's own alert rule engine, including `for:` and
+`keep_firing_for`. You only need a rules file and access to a Prometheus server
+that still has the data. The rules don't need to be deployed, and alertreplay
+doesn't change anything on the server.
+
+## Try it
+
+Build with Go 1.27.1 or newer:
 
 ```sh
 go build -o alertreplay .
-./alertreplay -url http://prometheus:9090 -start 2026-07-01 -end now rules.yml
-./alertreplay -url http://prometheus:9090 -start now-30d \
-  -rule HighLatency -rule ErrorRate -step 30s \
-  -header 'Authorization: Bearer TOKEN' -qps 3 \
-  -incidents incidents.yaml -lookback 24h -json rules.yml more.yml
 ```
 
-Put flags before file names. Start/end accept RFC3339 (including fractions), a
-UTC date, Unix seconds, `now`, or `now-30d`. Relative times share one clock
-snapshot. Durations support Go syntax plus `d` and `w`. `-start` and `-url` are
-required; `-end` defaults to `now`. Repeated headers preserve multiple values;
-avoid embedding credentials in shell history. Cross-origin redirects are rejected
-to prevent forwarding authentication headers to another host.
+Then replay your rules over the last 30 days:
 
-The step defaults to each group's `interval`, otherwise 1m. Evaluations are
-Unix-epoch aligned, starting at the first grid point >= start and ending at the
-last <= end. Steps must be whole milliseconds. Group labels, rule labels,
-`query_offset`, and series limits are honored. Each file is strictly validated
-with `rulefmt.ParseFile`, including recording rules and unselected alerts.
-Unknown `-rule` names fail rather than silently producing empty output.
+```sh
+./alertreplay -url http://localhost:9090 -start now-30d rules.yml
+```
 
-Requests run **serially**, at most `-qps` per second (default 3), with a two-minute
-per-request timeout and Ctrl-C cancellation. Each expression is fetched in
-non-overlapping chunks of at most 11,000 points per series. Coverage requests
-use the same limiter. Expression vectors are held in memory **one rule at a
-time**. High-cardinality rules/long ranges can still use substantial server and
-client memory; rate limiting is not a query-cost limit.
+The report lists each alert's firing periods, how long it was pending before it
+fired, and the labels identifying the affected instances. For example, this
+shortened output comes from the synthetic data included in the repository:
 
-## Output and incidents
+```text
+GaugeForFiveMinutes  fired 2 times  total 17m0s
+  START                 END                   DURATION  PENDING
+  2026-09-01T00:15:00Z  2026-09-01T00:17:00Z  2m0s      5m0s
+  2026-09-01T00:30:00Z  2026-09-01T00:45:00Z  15m0s     5m0s
+```
 
-Text includes a rule summary, each firing's start/end/duration/pending time and
-labels, and per-selector coverage. Counts and total duration sum **alert
-instances**: two overlapping label sets count twice. JSON includes `rules`,
-`warnings`, and optional `incidents`; timestamps are RFC3339, durations ending
-in `_seconds` are numbers, and `step_ns` is integer nanoseconds. Rule identity
-includes file and group, so duplicate alert names remain distinguishable.
+Here, the metric went above the threshold three times: for 3, 7, and 20 minutes.
+With `for: 5m`, the first excursion never fired. The other two fired after five
+minutes and stayed firing for another two and fifteen minutes, respectively.
+Adding `keep_firing_for: 3m` extends their end times to 00:20 and 00:48.
+
+## Tune one alert at a time
+
+Use `-rule` to focus on an alert and `-end` to stop at a particular date:
+
+```sh
+./alertreplay -url http://localhost:9090 \
+  -start 2026-09-01 -end 2026-09-08 \
+  -rule HighLatency rules.yml
+```
+
+Now change its threshold or `for:` in the file and run the same command again.
+You can repeat `-rule` to select several alerts, or pass several rules files.
+
+Dates are interpreted as UTC. You can also use a full timestamp, such as
+`2026-09-01T14:30:00Z`, or Unix seconds. Without `-end`, the replay ends at the
+current time.
+
+By default, alerts are evaluated at their rule group's interval, or once a
+minute if none is specified. Use `-step 30s` to try a different interval.
+
+## Compare against known incidents
+
+If you have an incident timeline, put it in a YAML file:
 
 ```yaml
 # incidents.yaml
-- name: arc-throttle
+- name: database-overload
   start: 2026-09-15T22:07:00Z
   end: 2026-09-16T00:30:00Z
 ```
 
-An incident is caught when a firing overlaps `[start - lookback, end]`.
-The default lookback is 24h. Lead time is `incident start - first matching
-fire`: positive is early warning, negative is late. Firings overlapping no
-incident window are listed as false positives; this classification only has
-meaning if the incident list is complete. One firing may catch multiple
-incidents. Closed firing intervals are half-open `[start, end)`.
-
-Alerts still firing at the last evaluation have JSON `end: null`; their duration
-is a **lower bound**, measured only through `observed_until`. Pending-only
-instances are not counted as firings. Pending duration is reported for each
-instance that actually fires.
-
-## Data coverage and recording rules
-
-Vector selectors are extracted with Prometheus's parser. Lightweight
-`min(timestamp(selector))` range queries find the first sample visible on the
-evaluation grid, stopping at the first nonempty chunk. Missing selectors report
-unavailable; late selectors report "no data observed before X". The aggregate
-coverage start is the latest first-observed sample among required selectors.
-
-**Coverage is range-limited and sampled, not the exact metric creation time or
-proof of uninterrupted coverage.** Short-lived series between evaluations may
-be missed, different label sets may start later, and Prometheus's lookback may
-make samples before the requested start visible. Range selectors, offsets,
-subqueries, and OR/absent expressions make this a diagnostic rather than a
-formal expression-availability guarantee. No unbounded all-history scan or
-high-cardinality `/series` enumeration is performed.
-
-References to recording metrics receive the same coverage checks, so late or
-missing recording history is warned about. `-inline-recording` substitutes
-parenthesized recording expressions recursively, with an explicit **best-effort**
-warning. Only bare metric references are supported. Decorated selectors
-(matchers, ranges, offsets or `@`), cycles, and ambiguous duplicate recording
-names fail rather than silently changing meaning. Inlining does **not** reproduce
-recording labels or recording evaluation schedules. Coverage of both original
-recording metrics and substituted source metrics is retained.
-
-## Accuracy and limits
-
-- Prometheus **3.15.0** (`prometheus/prometheus v0.315.0`) provides parsing and
-  `rules.AlertingRule.Eval`. The server performs PromQL evaluation; matching the
-  server version/features to the embedded version is recommended.
-- Live rules run at per-group offsets; edges can differ by up to one evaluation
-  interval. Scrape/evaluation ordering can add boundary ambiguity.
-- Historical gaps reset `for` when the expression actually becomes absent, just
-  as live evaluation would. A missed scrape alone does **not** necessarily reset
-  it: lookback and range functions may bridge the gap. Stored data cannot always
-  reconstruct past failed evaluations or missing staleness markers.
-- Each replay starts with empty alert state; `ALERTS_FOR_STATE` restoration after
-  restarts is not simulated. Allow a warm-up period before incidents of interest.
-- Annotation templates are skipped. Label templates are engine-rendered, but
-  template `query` calls are rejected. External labels and external URL are
-  empty; supply equivalent rule labels if necessary.
-- Native histogram *result vectors* are rejected explicitly, not silently
-  dropped. Expressions reducing histograms to floats can work normally.
-- `@ start()`/`@ end()` are rejected: their query-range chunk semantics differ
-  from live instant evaluations. Explicit fixed `@` timestamps are supported.
-- Incomplete retention/downsampling, server settings and recording-rule changes
-  can limit historical fidelity. This tool does not replay recording rules as
-  a historical dependency engine or infer missing incidents.
-
-## Tests and reproducible example
+Then pass it alongside your rules:
 
 ```sh
-go test ./...
-go vet ./...
-./scripts/fetch-prometheus.sh  # optional, pinned binaries + SHA256 verification
+./alertreplay -url http://localhost:9090 \
+  -start 2026-09-01 -incidents incidents.yaml rules.yml
+```
+
+The report shows which alerts caught each incident and how much warning they
+provided. A positive lead time means the alert fired before the incident began;
+a negative one means it fired after.
+
+By default, an alert counts as a catch if it was firing at any point during the
+incident or in the 24 hours before it. Use, for example, `-lookback 1h` to narrow
+that window. Firings outside every incident window are listed as false
+positives—so that label is only as reliable as your incident list.
+
+## Before trusting the results
+
+**Silence isn't always good news.** A metric might not have existed yet, or its
+older data might have expired. The report checks when each metric first appears
+within the replay range and warns about missing or late data. This is a sampled
+check, not proof that the history is complete.
+
+**The replay starts with no active alerts.** Start it before the incident you
+care about so alerts have time to become pending and fire. Prometheus's alert
+state restoration after a restart isn't simulated. Live evaluation schedules
+can also shift a firing or resolution by about one evaluation interval.
+
+**Scrape gaps don't necessarily reset `for:`.** They reset it when the alert
+expression stops returning the affected series. Prometheus's lookback and
+functions such as `rate()` may bridge a gap.
+
+An alert still firing at the end of the replay is marked `OPEN`; the tool
+can't tell you when it will resolve. Counts are per alert instance, so two
+hosts firing at the same time count as two firings.
+
+### What about recording rules?
+
+Normally, alertreplay uses the recording-rule results already stored in
+Prometheus. If you only deployed a recording rule recently, its older history
+will be missing even if the underlying metrics were collected.
+
+For simple references, `-inline-recording` can substitute the recording rule's
+expression from the same input files. Treat this as an approximation: it doesn't
+reproduce the recording rule's labels or evaluation schedule, and it rejects
+references it can't safely substitute. See the [reference](docs/reference.md)
+for the supported cases and other limitations.
+
+## Other useful options
+
+- **JSON output:** add `-json` to save results for comparison or further analysis.
+- **Authentication:** add `-header 'Authorization: Bearer TOKEN'`. Repeat the
+  flag if your server needs several headers.
+- **Request rate:** `-qps` defaults to three queries per second. Queries run one
+  at a time, but a long replay or a rule covering many series can still be
+  expensive. Start with a short range.
+
+Run `./alertreplay -help` for all options. Put flags before the rules file names.
+The [reference](docs/reference.md) covers output fields, evaluation details, and
+unsupported features.
+
+## Development
+
+Run the unit tests with `go test ./...`.
+
+To test against a real Prometheus server, download the pinned test binaries and
+run the integration suite:
+
+```sh
+./scripts/fetch-prometheus.sh
 ALERTREPLAY_INTEGRATION=1 go test ./integration -v -count=1
 ```
 
-No binaries/network are needed for unit tests. Integration tests skip when the
-optional binaries are unavailable. Tests backfill checked-in synthetic
-OpenMetrics with `promtool tsdb create-blocks-from openmetrics`, start isolated
-temporary Prometheus processes, and assert exact intervals for 3m/7m/20m
-threshold plateaus, `for: 5m`, `keep_firing_for`, a scrape gap, counter `rate`,
-late coverage, and open-ended firing. A separate live-rule test compares replay
-against Prometheus's own recorded `ALERTS` transitions.
-
-See `integration/README.md` for fixture details and a manual example command.
-For the synthetic September 1, 2026 gauge, `for: 5m` produces:
-
-```text
-GaugeForFiveMinutes  fired 2 times  total 17m0s
-  2026-09-01T00:15:00Z  2026-09-01T00:17:00Z   2m0s  pending 5m0s
-  2026-09-01T00:30:00Z  2026-09-01T00:45:00Z  15m0s  pending 5m0s
-```
-
-`keep_firing_for: 3m` extends those resolutions to 00:20 and 00:48 (23m total).
-The short 3m excursion never fires. Full captured CLI output is in
-`testdata/example-output.txt`.
-
-The only extra direct module beyond Prometheus, its API client and YAML is
-`prometheus/common`, required by their public API types. The larger transitive
-dependency tree comes from embedding the actual Prometheus rule engine.
+The suite checks known firing periods in synthetic data and compares a replay
+with alerts produced by a running Prometheus. See the [integration test guide](integration/README.md)
+for details, or the [full example report](testdata/example-output.txt) to see
+what the output looks like.
