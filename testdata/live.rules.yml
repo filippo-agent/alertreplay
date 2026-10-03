@@ -1,0 +1,8 @@
+groups:
+  - name: live-cross-check
+    interval: 1s
+    rules:
+      - alert: LiveCrossCheck
+        expr: synthetic_live > 0
+        for: 2s
+        keep_firing_for: 2s

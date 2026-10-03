@@ -1,0 +1,5 @@
+.tools/
+/alertreplay
+*.test
+__pycache__/
+*.pyc

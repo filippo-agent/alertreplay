@@ -1,0 +1,25 @@
+groups:
+  - name: historical
+    interval: 1m
+    rules:
+      - alert: GaugeForFiveMinutes
+        expr: synthetic_load > 5
+        for: 5m
+        labels:
+          severity: warning
+      - alert: GaugeKeepFiring
+        expr: synthetic_load > 5
+        for: 5m
+        keep_firing_for: 3m
+      - alert: GapResetsPending
+        expr: synthetic_gap > 5
+        for: 5m
+      - alert: CounterRate
+        expr: rate(synthetic_requests_total[2m]) > 5
+        for: 2m
+      - alert: LateCoverage
+        expr: synthetic_late > 5
+        for: 5m
+      - alert: StillFiring
+        expr: synthetic_tail > 5
+        for: 5m

@@ -1,0 +1,46 @@
+Replay 2026-09-01T00:00:00Z → 2026-09-01T01:00:00Z
+WARNING: LateCoverage: synthetic_late: no data observed before 2026-09-01T00:12:00Z (evaluation-grid estimate)
+
+GaugeForFiveMinutes  fired 2 times  total 17m0s  step 1m0s  coverage start 2026-09-01T00:00:00Z (grid estimate)
+  file: testdata/synthetic.rules.yml; group: historical
+  expression: synthetic_load > 5
+  coverage synthetic_load: data present at range start (first sampled timestamp 2026-09-01T00:00:00Z)
+  START                 END                   DURATION  PENDING  LABELS
+  2026-09-01T00:15:00Z  2026-09-01T00:17:00Z  2m0s      5m0s     {instance="fixture", severity="warning"}
+  2026-09-01T00:30:00Z  2026-09-01T00:45:00Z  15m0s     5m0s     {instance="fixture", severity="warning"}
+
+GaugeKeepFiring  fired 2 times  total 23m0s  step 1m0s  coverage start 2026-09-01T00:00:00Z (grid estimate)
+  file: testdata/synthetic.rules.yml; group: historical
+  expression: synthetic_load > 5
+  coverage synthetic_load: data present at range start (first sampled timestamp 2026-09-01T00:00:00Z)
+  START                 END                   DURATION  PENDING  LABELS
+  2026-09-01T00:15:00Z  2026-09-01T00:20:00Z  5m0s      5m0s     {instance="fixture"}
+  2026-09-01T00:30:00Z  2026-09-01T00:48:00Z  18m0s     5m0s     {instance="fixture"}
+
+GapResetsPending  fired 1 times  total 4m0s  step 1m0s  coverage start 2026-09-01T00:00:00Z (grid estimate)
+  file: testdata/synthetic.rules.yml; group: historical
+  expression: synthetic_gap > 5
+  coverage synthetic_gap: data present at range start (first sampled timestamp 2026-09-01T00:00:00Z)
+  START                 END                   DURATION  PENDING  LABELS
+  2026-09-01T00:16:00Z  2026-09-01T00:20:00Z  4m0s      5m0s     {instance="fixture"}
+
+CounterRate  fired 1 times  total 8m0s  step 1m0s  coverage start 2026-09-01T00:00:00Z (grid estimate)
+  file: testdata/synthetic.rules.yml; group: historical
+  expression: rate(synthetic_requests_total[2m]) > 5
+  coverage synthetic_requests_total: data present at range start (first sampled timestamp 2026-09-01T00:00:00Z)
+  START                 END                   DURATION  PENDING  LABELS
+  2026-09-01T00:12:00Z  2026-09-01T00:20:00Z  8m0s      2m0s     {instance="fixture"}
+
+LateCoverage  fired 1 times  total 8m0s  step 1m0s  coverage start 2026-09-01T00:12:00Z (grid estimate)
+  file: testdata/synthetic.rules.yml; group: historical
+  expression: synthetic_late > 5
+  coverage synthetic_late: no data observed before 2026-09-01T00:12:00Z (range-limited sample-grid estimate)
+  START                 END                   DURATION  PENDING  LABELS
+  2026-09-01T00:17:00Z  2026-09-01T00:25:00Z  8m0s      5m0s     {instance="fixture"}
+
+StillFiring  fired 1 times  total 5m0s  step 1m0s  coverage start 2026-09-01T00:00:00Z (grid estimate)
+  file: testdata/synthetic.rules.yml; group: historical
+  expression: synthetic_tail > 5
+  coverage synthetic_tail: data present at range start (first sampled timestamp 2026-09-01T00:00:00Z)
+  START                 END                                           DURATION  PENDING  LABELS
+  2026-09-01T00:55:00Z  OPEN (observed through 2026-09-01T01:00:00Z)  5m0s      5m0s     {instance="fixture"}
